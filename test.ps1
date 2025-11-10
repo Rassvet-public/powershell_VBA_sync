@@ -1,1 +1,0 @@
-Write-Host "Проверка Git"
