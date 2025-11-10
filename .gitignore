@@ -1,0 +1,42 @@
+# === PowerShell, Excel, VS Code: базовая защита ===
+
+# Конфигурация VS Code
+.vscode/
+.history/
+*.code-workspace
+
+# Временные файлы PowerShell
+*.ps1~
+*.ps1.tmp
+*.bak
+*.log
+*.err
+*.out
+
+# Модули и пакеты (если будешь ставить)
+*.nupkg
+*.psd1
+*.psm1
+*.psm1.lock
+
+# Excel, CSV, временные данные
+*.xls
+*.xlsx
+*.xlsm
+*.csv
+*.tmp
+~$*
+
+# Автосохранения Office
+*.asd
+*.wbk
+
+# Служебные каталоги Windows
+Thumbs.db
+Desktop.ini
+
+# Директории бэкапов и кеша
+backup/
+temp/
+cache/
+logs/
