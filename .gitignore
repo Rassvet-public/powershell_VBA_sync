@@ -1,0 +1,19 @@
+# Логи и временные файлы
+*.log
+*.tmp
+*.bak
+Thumbs.db
+
+# Excel бинарники
+~$*
+*.xlsb
+*.xlsx
+*.xlsm
+!VBA/
+
+# Системные
+.DS_Store
+*.swp
+
+# Visual Studio Code
+.vscode/
