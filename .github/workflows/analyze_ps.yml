@@ -1,4 +1,4 @@
-﻿name: PSScriptAnalyzer Check
+﻿name: PSScriptAnalyzer Check v2
 
 on:
   push:
@@ -26,10 +26,15 @@ jobs:
             Write-Host "No .ps1 files found."
             exit 0
           }
-          $errors = Invoke-ScriptAnalyzer -Path $files.FullName -Severity Error
+
+          # Convert FileInfo objects → string[]
+          $paths = $files | ForEach-Object { $_.FullName }
+
+          $errors = Invoke-ScriptAnalyzer -Path $paths -Severity Error
           if ($errors) {
             Write-Host "❌ PSScriptAnalyzer errors found:"
             $errors | Format-List
             exit 1
           }
+
           Write-Host "✔ PSScriptAnalyzer passed with no errors."
