@@ -1,4 +1,4 @@
-﻿name: PSScriptAnalyzer Check v2
+﻿name: PSScriptAnalyzer Check v3
 
 on:
   push:
@@ -7,12 +7,16 @@ on:
     branches: [ dev, master ]
 
 jobs:
-  psscriptanalyzer:
+  pssa:
     runs-on: windows-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Show PowerShell version
+        shell: pwsh
+        run: $PSVersionTable.PSVersion
 
       - name: Install PSScriptAnalyzer
         shell: pwsh
@@ -22,19 +26,27 @@ jobs:
         shell: pwsh
         run: |
           $files = Get-ChildItem -Recurse -Filter *.ps1
+
           if ($files.Count -eq 0) {
             Write-Host "No .ps1 files found."
             exit 0
           }
 
-          # Convert FileInfo objects → string[]
-          $paths = $files | ForEach-Object { $_.FullName }
+          # Convert FileInfo[] to pure string[]
+          $paths = @()
+          foreach ($f in $files) {
+            $paths += $f.FullName
+          }
+
+          Write-Host "Analyzing files:"
+          $paths | ForEach-Object { Write-Host " - $_" }
 
           $errors = Invoke-ScriptAnalyzer -Path $paths -Severity Error
+
           if ($errors) {
             Write-Host "❌ PSScriptAnalyzer errors found:"
             $errors | Format-List
             exit 1
           }
 
-          Write-Host "✔ PSScriptAnalyzer passed with no errors."
+          Write-Host "✔ No PSScriptAnalyzer errors found."
