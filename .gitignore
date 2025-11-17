@@ -11,6 +11,8 @@ ehthumbs.db
 *.log
 *.tmp
 *.xlsx
+*.xlsm
+*.xls
 *.bas
 /VBA
 
