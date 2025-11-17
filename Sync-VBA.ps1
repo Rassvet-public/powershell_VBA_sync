@@ -1,8 +1,8 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 <#
-  Sync-VBA.ps1  v2025.11.11r10
-  Автоматизация экспорта и импорта VBA с автодетектом кодировок,
-  логом, прогрессбаром и безопасным управлением Excel.
+    Sync-VBA.ps1  v2025.11.17r1
+    Основной скрипт: экспорт / импорт VBA с поддержкой x86 Excel,
+    автодетектом кодировок и аккуратным управлением Excel.
 #>
 
 param(
@@ -10,242 +10,593 @@ param(
     [string]$ProjectPath = (Get-Location)
 )
 
-# ---------- Лог ----------
-$LogFile = Join-Path $ProjectPath "SyncVBA.log"
-function Write-Log([string]$msg,[ConsoleColor]$color="Gray"){
-    $ts=(Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    $line="[$ts] $msg"
-    Write-Host $line -ForegroundColor $color
-    Add-Content -Encoding UTF8 -Path $LogFile -Value $line
-}
-Add-Content -Encoding UTF8 -Path $LogFile -Value "`n=== Run $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+# Глобальный путь к лог-файлу для всех функций
+$script:SyncVba_LogFile = $null
 
-# ---------- Кодировки ----------
-chcp 65001 > $null
-[Console]::InputEncoding=[System.Text.Encoding]::UTF8
-[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
+<# ======================= ЛОГИРОВАНИЕ ======================= #>
+function Write-Log {
+    <#
+        Многострочный комментарий:
+        Функция логирования в консоль и файл SyncVBA.log.
+        Цветной вывод в консоль, в файл пишем всегда серым текстом.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
 
-# ---------- Пасхалка ----------
-$today = Get-Date
-if($today.Month -eq 11 -and $today.Day -eq 11){
-    Write-Log "🎂 С днём рождения, инженер Александр!" Magenta
-    [console]::beep(880,150); [console]::beep(988,150); [console]::beep(1047,250)
-}
+        [ConsoleColor]$Color = [ConsoleColor]::Gray
+    )
 
-# ---------- Вспомогательные функции ----------
-function Test-Mojibake([string]$s){
-    if([string]::IsNullOrEmpty($s)){return $false}
-    return ($s -match '[ÃÐÑâ€“â€”â€œâ€â€˜â€™¢™€]')
-}
-function Fix-Mojibake([string]$s){
-    $bytes=[Text.Encoding]::GetEncoding(1252).GetBytes($s)
-    return [Text.Encoding]::UTF8.GetString($bytes)
-}
-function Write-UTF8BOM([string]$path,[string]$text){
-    $utf8bom=New-Object System.Text.UTF8Encoding($true)
-    [IO.File]::WriteAllText($path,$text,$utf8bom)
-}
-function Preview-FirstLines([string]$text,[int]$n=8){
-    $lines=($text -split "`r?`n")[0..([Math]::Min($n,(($text -split "`r?`n").Count))-1)]
-    return ($lines -join "`n")
-}
-function Convert-TextFile-ToUtf8Bom([string]$path){
-    if(!(Test-Path $path)){return}
-    $ansi=[Text.Encoding]::Default
-    $raw=[IO.File]::ReadAllText($path,$ansi)
-    if(Test-Mojibake $raw){$raw=Fix-Mojibake $raw}
-    Write-UTF8BOM $path $raw
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $line = "[{0}] {1}" -f $timestamp, $Message
+
+    Write-Host $line -ForegroundColor $Color
+
+    if ($script:SyncVba_LogFile) {
+        Add-Content -Encoding UTF8 -Path $script:SyncVba_LogFile -Value $line
+    }
 }
 
-# ---------- Перезапуск в 32-бит ----------
-if([Environment]::Is64BitProcess -and (Test-Path "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe")){
-    Write-Log "Launching 32-bit PowerShell..." Yellow
-    $wow="$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
-    Start-Process -FilePath $wow -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`" -Mode $Mode -ProjectPath `"$ProjectPath`"" -Wait
-    Pause
+<# ======================= КОДИРОВКИ / MOJIBAKE ======================= #>
+function Test-Mojibake {
+    <#
+        Проверка строки на типичные "кракозябры" после перепутанной
+        UTF-8 / ANSI кодировки.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    if ([string]::IsNullOrEmpty($Text)) {
+        return $false
+    }
+
+    return ($Text -match '[ÃÐÑâ€“â€”â€œâ€â€˜â€™¢™€]')
+}
+
+function Fix-Mojibake {
+    <#
+        Попытка "починить" кракозябры:
+        считаем, что текст ошибочно прочитали как 1252 вместо UTF-8,
+        и перекодируем обратно.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $bytes = [System.Text.Encoding]::GetEncoding(1252).GetBytes($Text)
+    return [System.Text.Encoding]::UTF8.GetString($bytes)
+}
+
+function Write-UTF8BOM {
+    <#
+        Запись текста в файл с явным UTF-8 BOM,
+        как требует твой проект.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $encoding = New-Object System.Text.UTF8Encoding($true)
+    [System.IO.File]::WriteAllText($Path, $Text, $encoding)
+}
+
+function Convert-TextFile-ToUtf8Bom {
+    <#
+        Чтение текстового файла в системной ANSI-кодировке,
+        починка кракозябр (если есть) и запись в UTF-8 BOM.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -Path $Path)) {
+        return
+    }
+
+    $ansiEncoding = [System.Text.Encoding]::Default
+    $raw = [System.IO.File]::ReadAllText($Path, $ansiEncoding)
+    if (Test-Mojibake -Text $raw) {
+        $raw = Fix-Mojibake -Text $raw
+    }
+
+    Write-UTF8BOM -Path $Path -Text $raw
+}
+
+<# ======================= СРЕДА / x86 ПЕРЕЗАПУСК ======================= #>
+function Write-EnvironmentInfo {
+    <#
+        Логируем архитектуру PowerShell и Excel.
+        Используем ключ реестра Excel 2016 (16.0).
+    #>
+    [CmdletBinding()]
+    param()
+
+    $psArch = if ([Environment]::Is64BitProcess) { "x64" } else { "x86" }
+    $excelArch = ""
+
+    try {
+        $key = "HKLM:\SOFTWARE\Microsoft\Office\16.0\Excel\InstallRoot"
+        if (Test-Path -Path $key) {
+            $path = (Get-ItemProperty -Path $key).Path
+            $excelArch = if ($path -match "Program Files \(x86\)") { "x86" } else { "x64" }
+        }
+    }
+    catch {
+        # Тихая ошибка, просто не знаем архитектуру Excel
+    }
+
+    Write-Log ("📊 Среда: Excel={0}, PowerShell={1}" -f $excelArch, $psArch)
+}
+
+function Stop-ExcelAll {
+    <#
+        Принудительное завершение всех процессов Excel.
+        Используется в режиме KillExcel.
+    #>
+    [CmdletBinding()]
+    param()
+
+    Get-Process -Name 'EXCEL' -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-32BitSelf {
+    <#
+        Перезапуск текущего скрипта в 32-битной версии PowerShell
+        для работы с 32-битным Excel.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Mode,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectPath
+    )
+
+    if (-not [Environment]::Is64BitProcess) {
+        return
+    }
+
+    $wowPath = Join-Path -Path $env:SystemRoot -ChildPath 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -Path $wowPath)) {
+        return
+    }
+
+    Write-Log "Перезапуск в 32-битной версии PowerShell для совместимости с Excel..." ([ConsoleColor]::Yellow)
+
+    $argumentList = @(
+        '-NoExit',
+		'-ExecutionPolicy', 'Bypass',
+        '-NoProfile',
+        '-File', "`"$PSCommandPath`"",
+        '-Mode', $Mode,
+        '-ProjectPath', "`"$ProjectPath`""
+    )
+
+    Start-Process -FilePath $wowPath -ArgumentList $argumentList -Wait
     exit
 }
 
-# ---------- Информация о среде ----------
-$psArch=if([Environment]::Is64BitProcess){"x64"}else{"x86"}
-$excelArch=""
-try{
-    $key="HKLM:\SOFTWARE\Microsoft\Office\16.0\Excel\InstallRoot"
-    if(Test-Path $key){
-        $path=(Get-ItemProperty $key).Path
-        $excelArch=if($path -match "Program Files \(x86\)"){"x86"}else{"x64"}
-    }
-}catch{}
-Write-Log "📊 Среда: Excel=$excelArch, PowerShell=$psArch"
+<# ======================= ВЫБОР КНИГИ EXCEL ======================= #>
+function Select-Workbook {
+    <#
+        Логика выбора Excel-книги:
+        1) если книги уже открыты — даём выбрать;
+        2) если нет — ищем .xlsm в ProjectPath;
+        3) если не нашли — просим путь руками.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Excel,
 
-# ---------- Меню ----------
-if($Mode -eq 0){
-    Write-Host "`n 1-Экспорт  2-Импорт  3-Оба  4-KillExcel" -ForegroundColor Cyan
-    $Mode=Read-Host "Введите режим"
-}
-switch($Mode){
-    1{Write-Log "🚀 Режим: ЭКСПОРТ" Cyan}
-    2{Write-Log "🚀 Режим: ИМПОРТ" Cyan}
-    3{Write-Log "🚀 Режим: ЭКСПОРТ+ИМПОРТ" Cyan}
-    4{
-        Write-Log "💀 Завершаем все процессы Excel..." Yellow
-        Stop-Process -Name EXCEL -Force -ErrorAction SilentlyContinue
-        Write-Log "✅ Все экземпляры Excel завершены." Green
-        Pause
-        exit
-    }
-    default{Write-Log "❌ Неизвестный режим." Red; Pause; exit}
-}
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectPath
+    )
 
-# ---------- Подключение к Excel ----------
-Write-Log "🧭 Поиск активного Excel..."
-try{
-    $excel=[Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
-    Write-Log "📎 Подключились к активному Excel." Green
-}catch{
-    $running=Get-Process -Name "EXCEL" -ErrorAction SilentlyContinue
-    if($running){
-        Write-Log "⚠ Excel запущен, но COM недоступен — ждём..." Yellow
-        Start-Sleep -Seconds 2
-        try{
-            $excel=[Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
-            Write-Log "📎 Подключились после ожидания." Green
-        }catch{
-            Write-Log "⚠ COM не отвечает — создаём новый Excel." Yellow
-            $excel=New-Object -ComObject Excel.Application
-            $excel.Visible=$true
+    $workbooks = @($Excel.Workbooks)
+
+    if ($workbooks.Count -eq 0) {
+        $xlsmFiles = Get-ChildItem -Path $ProjectPath -Filter '*.xlsm' -ErrorAction SilentlyContinue
+        if ($xlsmFiles.Count -eq 1) {
+            return $Excel.Workbooks.Open($xlsmFiles.FullName)
         }
-    }else{
-        Write-Log "⚠ Excel не найден — создаём новый экземпляр." Yellow
-        $excel=New-Object -ComObject Excel.Application
-        $excel.Visible=$true
-    }
-}
-$excel.DisplayAlerts=$false
-$excel.EnableEvents=$false
-$excel.ScreenUpdating=$false
-$excel.Interactive=$false
-
-# ---------- Определение книги ----------
-$books=@($excel.Workbooks)
-if($books.Count -eq 0){
-    $xlsm=Get-ChildItem -Path $ProjectPath -Filter *.xlsm -ErrorAction SilentlyContinue
-    if($xlsm.Count -eq 1){
-        $wb=$excel.Workbooks.Open($xlsm.FullName)
-    }elseif($xlsm.Count -gt 1){
-        Write-Host "`nНайдено несколько файлов Excel:" -ForegroundColor Yellow
-        for($i=0;$i -lt $xlsm.Count;$i++){Write-Host "  $($i+1). $($xlsm[$i].Name)"}
-        $sel=Read-Host "Введите номер файла"
-        $wb=$excel.Workbooks.Open($xlsm[[int]$sel-1].FullName)
-    }else{
-        Write-Host "Нет открытых книг и .xlsm не найдено. Укажи путь:" -ForegroundColor Yellow
-        $path=Read-Host "Полный путь к .xlsm"
-        $wb=$excel.Workbooks.Open($path)
-    }
-}elseif($books.Count -eq 1){
-    $wb=$books.Item(1)
-}else{
-    Write-Host "`nНайдено несколько открытых книг:"
-    for($i=0;$i -lt $books.Count;$i++){Write-Host "  $($i+1). $($books[$i].Name)"}
-    $sel=Read-Host "Введите номер файла"
-    $wb=$books.Item([int]$sel)
-}
-$wbName=$wb.Name
-Write-Log "📘 Активная книга: $wbName"
-
-# ---------- Папка для модулей ----------
-$ExportPath=Join-Path $ProjectPath "VBA"
-if(!(Test-Path $ExportPath)){New-Item -ItemType Directory -Path $ExportPath|Out-Null}
-
-# ---------- ЭКСПОРТ ----------
-if($Mode -in 1,3){
-    Write-Log ">>> Экспорт VBA-компонентов..."
-    $vbComps=@($wb.VBProject.VBComponents | Where-Object { $_.Type -ne 100 })
-    $total=$vbComps.Count; $i=0
-    foreach($vbComp in $vbComps){
-        $i++; $p=[int](($i/$total)*100)
-        Write-Progress -Activity "Экспорт VBA" -Status "$($vbComp.Name)" -PercentComplete $p
-        try{
-            switch($vbComp.Type){
-                1 { $ext=".bas" } 2 { $ext=".cls" } 3 { $ext=".frm" } default { $ext=".bas" }
+        elseif ($xlsmFiles.Count -gt 1) {
+            Write-Host "`nНайдено несколько файлов Excel:" -ForegroundColor Yellow
+            for ($index = 0; $index -lt $xlsmFiles.Count; $index++) {
+                Write-Host ("  {0}. {1}" -f ($index + 1), $xlsmFiles[$index].Name)
             }
-            $target=Join-Path $ExportPath ($vbComp.Name+$ext)
-            if($ext -in ".bas",".cls"){
-                $lines=$vbComp.CodeModule.CountOfLines
-                if($lines -gt 0){
-                    $raw=$vbComp.CodeModule.Lines(1,$lines)
-                    $text=$raw
-                    if(Test-Mojibake $text){
-                        Write-Log "⚠ Кракозябры в $($vbComp.Name) — перекодировка..." Yellow
-                        $text=Fix-Mojibake $text
+            $selection = Read-Host "Введите номер файла"
+            $selectedIndex = [int]$selection - 1
+            return $Excel.Workbooks.Open($xlsmFiles[$selectedIndex].FullName)
+        }
+        else {
+            Write-Host "Нет открытых книг и .xlsm не найдено. Укажи путь:" -ForegroundColor Yellow
+            $path = Read-Host "Полный путь к .xlsm"
+            return $Excel.Workbooks.Open($path)
+        }
+    }
+    elseif ($workbooks.Count -eq 1) {
+        return $workbooks.Item(1)
+    }
+    else {
+        Write-Host "`nНайдено несколько открытых книг:" -ForegroundColor Yellow
+        for ($index = 0; $index -lt $workbooks.Count; $index++) {
+            Write-Host ("  {0}. {1}" -f ($index + 1), $workbooks[$index].Name)
+        }
+        $selection = Read-Host "Введите номер файла"
+        $selectedIndex = [int]$selection
+        return $workbooks.Item($selectedIndex)
+    }
+}
+
+<# ======================= СЕССИЯ EXCEL ======================= #>
+function Start-ExcelSession {
+    <#
+        Создаём или находим Excel, выбираем книгу,
+        подготавливаем папку VBA и возвращаем объект с параметрами сессии.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectPath
+    )
+
+    Write-Log "🧭 Поиск активного Excel..." ([ConsoleColor]::Gray)
+
+    $excel = $null
+    $createdNewExcel = $false
+
+    try {
+        $excel = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
+        Write-Log "📎 Подключились к активному Excel." ([ConsoleColor]::Green)
+    }
+    catch {
+        $running = Get-Process -Name 'EXCEL' -ErrorAction SilentlyContinue
+        if ($running) {
+            Write-Log "⚠ Excel запущен, но COM недоступен — создаём новый экземпляр." ([ConsoleColor]::Yellow)
+        }
+        else {
+            Write-Log "⚠ Excel не найден — создаём новый экземпляр." ([ConsoleColor]::Yellow)
+        }
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $true
+        $createdNewExcel = $true
+    }
+
+    $excel.DisplayAlerts  = $false
+    $excel.EnableEvents   = $false
+    $excel.ScreenUpdating = $false
+    $excel.Interactive    = $false
+
+    $workbook = Select-Workbook -Excel $excel -ProjectPath $ProjectPath
+    $workbookName = $workbook.Name
+    Write-Log ("📘 Активная книга: {0}" -f $workbookName)
+
+    $exportPath = Join-Path -Path $ProjectPath -ChildPath 'VBA'
+    if (-not (Test-Path -Path $exportPath)) {
+        New-Item -ItemType Directory -Path $exportPath | Out-Null
+    }
+
+    return [pscustomobject]@{
+        Excel           = $excel
+        Workbook        = $workbook
+        ProjectPath     = $ProjectPath
+        ExportPath      = $exportPath
+        CreatedNewExcel = $createdNewExcel
+    }
+}
+
+function Stop-ExcelSession {
+    <#
+        Аккуратно сохраняем книгу, восстанавливаем параметры Excel,
+        закрываем созданный экземпляр (если мы его создавали).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Session
+    )
+
+    $excel          = $Session.Excel
+    $workbook       = $Session.Workbook
+    $createdNewExcel = $Session.CreatedNewExcel
+
+    try {
+        if ($workbook -ne $null) {
+            Write-Log "💾 Сохраняем книгу..." ([ConsoleColor]::Gray)
+            $workbook.Save()
+        }
+    }
+    catch {
+        Write-Log ("⚠ Ошибка при сохранении книги: {0}" -f $_.Exception.Message) ([ConsoleColor]::Red)
+    }
+    finally {
+        if ($workbook -ne $null) {
+            try {
+                $workbook.Close($true) | Out-Null
+            }
+            catch { }
+        }
+
+        if ($excel -ne $null) {
+            try {
+                $excel.DisplayAlerts  = $true
+                $excel.EnableEvents   = $true
+                $excel.ScreenUpdating = $true
+                $excel.Interactive    = $true
+
+                if ($createdNewExcel) {
+                    $excel.Quit()
+                }
+            }
+            catch { }
+
+            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+        }
+    }
+}
+
+<# ======================= ЭКСПОРТ / ИМПОРТ ======================= #>
+function Export-VBAModules {
+    <#
+        Экспорт всех модулей, классов и форм VBA
+        в папку VBA с сохранением UTF-8 BOM.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Session
+    )
+
+    $workbook   = $Session.Workbook
+    $exportPath = $Session.ExportPath
+
+    Write-Log ">>> Экспорт VBA-компонентов..." ([ConsoleColor]::Gray)
+
+    $vbComponents = @($workbook.VBProject.VBComponents | Where-Object { $_.Type -ne 100 })
+    $total = $vbComponents.Count
+    $index = 0
+
+    foreach ($vbComponent in $vbComponents) {
+        $index++
+        $percent = if ($total -gt 0) { [int](($index / $total) * 100) } else { 0 }
+
+        Write-Progress -Activity "Экспорт VBA" -Status $vbComponent.Name -PercentComplete $percent
+
+        try {
+            switch ($vbComponent.Type) {
+                1 { $extension = ".bas" }
+                2 { $extension = ".cls" }
+                3 { $extension = ".frm" }
+                default { $extension = ".bas" }
+            }
+
+            $targetPath = Join-Path -Path $exportPath -ChildPath ($vbComponent.Name + $extension)
+
+            if ($extension -in @(".bas", ".cls")) {
+                $lineCount = $vbComponent.CodeModule.CountOfLines
+                if ($lineCount -gt 0) {
+                    $codeText = $vbComponent.CodeModule.Lines(1, $lineCount)
+                    if (Test-Mojibake -Text $codeText) {
+                        $codeText = Fix-Mojibake -Text $codeText
                     }
-                    Write-UTF8BOM $target $text
-                    $prev=Preview-FirstLines $text 6
-                    Write-Log "✔ Exported: $($vbComp.Name)$ext" Green
-                    Write-Host $prev -ForegroundColor DarkGray
+                    Write-UTF8BOM -Path $targetPath -Text $codeText
+                    Write-Log ("✔ Экспортирован модуль: {0}{1}" -f $vbComponent.Name, $extension) ([ConsoleColor]::Green)
                 }
-            }else{
-                $vbComp.Export($target)
-                Convert-TextFile-ToUtf8Bom $target
-                $frx=[IO.Path]::ChangeExtension($target,".frx")
-                if(Test-Path $frx){Copy-Item $frx -Dest $ExportPath -Force}
-                Write-Log "✔ Exported form: $($vbComp.Name)$ext" Green
             }
-        }catch{
-            Write-Log ("⚠ Ошибка при экспорте "+$vbComp.Name+": "+$_.Exception.Message) Red
+            elseif ($extension -eq ".frm") {
+                $vbComponent.Export($targetPath)
+                Convert-TextFile-ToUtf8Bom -Path $targetPath
+                Write-Log ("✔ Экспортирована форма: {0}{1}" -f $vbComponent.Name, $extension) ([ConsoleColor]::Green)
+            }
+        }
+        catch {
+            Write-Log ("⚠ Ошибка при экспорте {0}: {1}" -f $vbComponent.Name, $_.Exception.Message) ([ConsoleColor]::Red)
         }
     }
-    Write-Progress -Activity "Экспорт VBA" -Completed
-    Write-Log "✅ Все модули успешно экспортированы." Cyan
-    if(Get-Command code -ErrorAction SilentlyContinue){
-        Start-Process "code" -ArgumentList "-r `"$ExportPath`""
-        Write-Log "📂 Открыт каталог в текущем окне VS Code." DarkGray
+
+    Write-Progress -Activity "Экспорт VBA" -Completed -Status "Готово"
+    Write-Log "✅ Все модули успешно экспортированы." ([ConsoleColor]::Cyan)
+}
+
+function Import-VBAModules {
+    <#
+        Импорт модулей, классов и форм VBA из папки VBA в книгу.
+        Модули перезаписываются, формы импортируются с копированием .frx.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Session
+    )
+
+    $workbook   = $Session.Workbook
+    $exportPath = $Session.ExportPath
+
+    Write-Log ">>> Импорт VBA-компонентов..." ([ConsoleColor]::Gray)
+
+    $files = Get-ChildItem -Path $exportPath -Include *.bas,*.cls,*.frm -File -ErrorAction SilentlyContinue
+    foreach ($file in $files) {
+        $name      = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+        $extension = $file.Extension.ToLowerInvariant()
+
+        try {
+            if ($extension -in @(".bas", ".cls")) {
+                $text = Get-Content -Raw -Encoding UTF8 -Path $file.FullName
+                if (Test-Mojibake -Text $text) {
+                    $text = Fix-Mojibake -Text $text
+                }
+
+                $vbComponent = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $name }
+                if (-not $vbComponent) {
+                    $componentType = if ($extension -eq ".cls") { 2 } else { 1 }
+                    $vbComponent = $workbook.VBProject.VBComponents.Add($componentType)
+                    $vbComponent.Name = $name
+                }
+
+                $codeModule = $vbComponent.CodeModule
+                $linesCount = $codeModule.CountOfLines
+                if ($linesCount -gt 0) {
+                    $codeModule.DeleteLines(1, $linesCount)
+                }
+                $codeModule.AddFromString($text)
+
+                Write-Log ("✔ Импортирован модуль: {0}{1}" -f $name, $extension) ([ConsoleColor]::Green)
+            }
+            elseif ($extension -eq ".frm") {
+                $existing = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $name }
+                if ($existing) {
+                    $workbook.VBProject.VBComponents.Remove($existing)
+                }
+
+                $null = $workbook.VBProject.VBComponents.Import($file.FullName)
+
+                $frxPath = [System.IO.Path]::ChangeExtension($file.FullName, ".frx")
+                if (Test-Path -Path $frxPath) {
+                    $targetFrx = Join-Path -Path ([System.IO.Path]::GetDirectoryName($workbook.FullName)) -ChildPath ([System.IO.Path]::GetFileName($frxPath))
+                    Copy-Item -Path $frxPath -Destination $targetFrx -Force
+                }
+
+                Write-Log ("✔ Импортирована форма: {0}{1}" -f $name, $extension) ([ConsoleColor]::Green)
+            }
+        }
+        catch {
+            Write-Log ("⚠ Ошибка при импорте {0}{1}: {2}" -f $name, $extension, $_.Exception.Message) ([ConsoleColor]::Red)
+        }
     }
 
-    if ($Mode -eq 1) {
-        $excel.Interactive = $true
-        Write-Host "`n=== Работа завершена. Нажми любую клавишу для выхода... ===" -ForegroundColor Gray
-        Pause
-        return
+    Write-Log "✅ Импорт завершён, книга сохранена." ([ConsoleColor]::Cyan)
+}
+
+<# ======================= VS CODE / ФИНАЛ ======================= #>
+function Open-VbaFolderInCode {
+    <#
+        Открытие папки VBA в текущем окне VS Code (если доступна команда code).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExportPath
+    )
+
+    if (Get-Command -Name code -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath 'code' -ArgumentList "-r `"$ExportPath`""
+        Write-Log "📂 Открыт каталог в текущем окне VS Code." ([ConsoleColor]::DarkGray)
     }
 }
 
-# ---------- ИМПОРТ ----------
-if($Mode -in 2,3){
-    Write-Log ">>> Импорт VBA..."
-    $files=Get-ChildItem -Path $ExportPath -Include *.bas,*.cls,*.frm -ErrorAction SilentlyContinue
-    foreach($file in $files){
-        $name=[IO.Path]::GetFileNameWithoutExtension($file)
-        $ext=$file.Extension.ToLower()
-        try{
-            if($ext -in ".bas",".cls"){
-                $text=Get-Content -Raw -Encoding UTF8 $file
-                if(Test-Mojibake $text){$text=Fix-Mojibake $text}
-                $vbComp=$wb.VBProject.VBComponents|Where-Object{$_.Name -eq $name}
-                if(-not $vbComp){$vbComp=$wb.VBProject.VBComponents.Add(1);$vbComp.Name=$name}
-                $vbComp.CodeModule.DeleteLines(1,$vbComp.CodeModule.CountOfLines)
-                $vbComp.CodeModule.AddFromString($text)
-                Write-Log "✔ Импортирован: $name$ext" Green
-            }else{
-                $old=$wb.VBProject.VBComponents|?{$_.Name -eq $name}
-                if($old){try{$wb.VBProject.VBComponents.Remove($old)}catch{}}
-                $wb.VBProject.VBComponents.Import($file.FullName)
-                $frx=[IO.Path]::ChangeExtension($file.FullName,".frx")
-                if(Test-Path $frx){
-                    $tfrx=Join-Path ([IO.Path]::GetDirectoryName($wb.FullName)) ($file.BaseName+".frx")
-                    Copy-Item $frx -Dest $tfrx -Force
-                }
-                Write-Log "✔ Импортирован: $name$ext" Green
-            }
-        }catch{
-            Write-Log ("⚠ Ошибка при импорте "+$name+$ext+": "+$_.Exception.Message) Red
-        }
-    }
-    $wb.Save()
-    Write-Log "✅ Импорт завершён, книга сохранена." Cyan
+function Show-FinishMessage {
+    <#
+        Финальное сообщение и пауза, чтобы окно не закрывалось мгновенно.
+    #>
+    [CmdletBinding()]
+    param()
+
+    Write-Host "`n=== Работа завершена. Нажми любую клавишу для выхода... ===" -ForegroundColor Gray
+    Pause
 }
 
-# ---------- Финал ----------
-$excel.Interactive = $true
-Write-Host "`n=== Работа завершена. Нажми любую клавишу для выхода... ===" -ForegroundColor Gray
-Pause
+<# ======================= ГЛАВНАЯ ФУНКЦИЯ ======================= #>
+function Invoke-SyncVbaMain {
+    <#
+        Главная точка входа: меню, перезапуск в x86, запуск экспорта/импорта.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Mode,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectPath
+    )
+
+    $script:SyncVba_LogFile = Join-Path -Path $ProjectPath -ChildPath 'SyncVBA.log'
+    Add-Content -Encoding UTF8 -Path $script:SyncVba_LogFile -Value "`n=== Run $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+
+    chcp 65001 > $null
+    [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+    $today = Get-Date
+    if ($today.Month -eq 11 -and $today.Day -eq 11) {
+        Write-Log "🎂 С днём рождения, инженер Александр!" ([ConsoleColor]::Magenta)
+        [Console]::Beep(880,150); [Console]::Beep(988,150); [Console]::Beep(1047,250)
+    }
+
+    Write-EnvironmentInfo
+
+    $effectiveMode = $Mode
+    if ($effectiveMode -eq 0) {
+        Write-Host "`n 1-Экспорт  2-Импорт  3-Оба  4-KillExcel" -ForegroundColor Cyan
+        $inputValue = Read-Host "Введите режим"
+        [void][int]::TryParse($inputValue, [ref]$effectiveMode)
+    }
+
+    switch ($effectiveMode) {
+        1 { Write-Log "🚀 Режим: ЭКСПОРТ" ([ConsoleColor]::Cyan) }
+        2 { Write-Log "🚀 Режим: ИМПОРТ" ([ConsoleColor]::Cyan) }
+        3 { Write-Log "🚀 Режим: ЭКСПОРТ+ИМПОРТ" ([ConsoleColor]::Cyan) }
+        4 {
+            Write-Log "💀 Завершаем все процессы Excel..." ([ConsoleColor]::Yellow)
+            Stop-ExcelAll
+            Write-Log "✅ Все экземпляры Excel завершены." ([ConsoleColor]::Green)
+            Show-FinishMessage
+            return
+        }
+        Default {
+            Write-Log "❌ Неизвестный режим." ([ConsoleColor]::Red)
+            Show-FinishMessage
+            return
+        }
+    }
+
+    Invoke-32BitSelf -Mode $effectiveMode -ProjectPath $ProjectPath
+
+    $session    = Start-ExcelSession -ProjectPath $ProjectPath
+    $exportDone = $false
+    $importDone = $false
+
+    try {
+        if ($effectiveMode -eq 1 -or $effectiveMode -eq 3) {
+            Export-VBAModules -Session $session
+            $exportDone = $true
+        }
+
+        if ($effectiveMode -eq 2 -or $effectiveMode -eq 3) {
+            Import-VBAModules -Session $session
+            $importDone = $true
+        }
+    }
+    finally {
+        Stop-ExcelSession -Session $session
+    }
+
+    if ($exportDone -and -not $importDone) {
+        Open-VbaFolderInCode -ExportPath $session.ExportPath
+    }
+
+    Show-FinishMessage
+}
+
+# Автоматический запуск только если скрипт запускают как .\Sync-VBA.ps1,
+# а не dot-source (в обёртках Export-VBA.ps1 / Import-VBA.ps1).
+if ($MyInvocation.InvocationName -ne '.') {
+    Invoke-SyncVbaMain -Mode $Mode -ProjectPath $ProjectPath
+}
