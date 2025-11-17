@@ -10,6 +10,9 @@ ehthumbs.db
 # Logs
 *.log
 *.tmp
+*.xlsx
+*.bas
+/VBA
 
 # Excel backup files
 *.xlk

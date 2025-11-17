@@ -284,7 +284,9 @@ function Start-ExcelSession {
     $excel.Interactive    = $false
 
     $workbook = Select-Workbook -Excel $excel -ProjectPath $ProjectPath
-    $workbookName = $workbook.Name
+    $workbookName      = $workbook.Name
+    $workbookBaseName  = [System.IO.Path]::GetFileNameWithoutExtension($workbookName)
+
     Write-Log ("📘 Активная книга: {0}" -f $workbookName)
 
     $exportPath = Join-Path -Path $ProjectPath -ChildPath 'VBA'
@@ -293,13 +295,16 @@ function Start-ExcelSession {
     }
 
     return [pscustomobject]@{
-        Excel           = $excel
-        Workbook        = $workbook
-        ProjectPath     = $ProjectPath
-        ExportPath      = $exportPath
-        CreatedNewExcel = $createdNewExcel
+        Excel             = $excel
+        Workbook          = $workbook
+        WorkbookName      = $workbookName
+        WorkbookBaseName  = $workbookBaseName
+        ProjectPath       = $ProjectPath
+        ExportPath        = $exportPath
+        CreatedNewExcel   = $createdNewExcel
     }
 }
+
 
 function Stop-ExcelSession {
     <#
@@ -358,6 +363,7 @@ function Export-VBAModules {
     <#
         Экспорт всех модулей, классов и форм VBA
         в папку VBA с сохранением UTF-8 BOM.
+        Имена файлов: <ИмяКнигиБезРасширения>_<ИмяМодуля>.bas/.cls/.frm
     #>
     [CmdletBinding()]
     param(
@@ -365,8 +371,9 @@ function Export-VBAModules {
         $Session
     )
 
-    $workbook   = $Session.Workbook
-    $exportPath = $Session.ExportPath
+    $workbook          = $Session.Workbook
+    $exportPath        = $Session.ExportPath
+    $workbookBaseName  = $Session.WorkbookBaseName
 
     Write-Log ">>> Экспорт VBA-компонентов..." ([ConsoleColor]::Gray)
 
@@ -382,13 +389,15 @@ function Export-VBAModules {
 
         try {
             switch ($vbComponent.Type) {
-                1 { $extension = ".bas" }
-                2 { $extension = ".cls" }
-                3 { $extension = ".frm" }
+                1 { $extension = ".bas" }  # стандартный модуль
+                2 { $extension = ".cls" }  # класс
+                3 { $extension = ".frm" }  # форма
                 default { $extension = ".bas" }
             }
 
-            $targetPath = Join-Path -Path $exportPath -ChildPath ($vbComponent.Name + $extension)
+            # Имя файла: <ИмяКнигиБезРасширения>_<ИмяМодуля>.ext
+            $fileName   = "{0}_{1}{2}" -f $workbookBaseName, $vbComponent.Name, $extension
+            $targetPath = Join-Path -Path $exportPath -ChildPath $fileName
 
             if ($extension -in @(".bas", ".cls")) {
                 $lineCount = $vbComponent.CodeModule.CountOfLines
@@ -398,13 +407,13 @@ function Export-VBAModules {
                         $codeText = Fix-Mojibake -Text $codeText
                     }
                     Write-UTF8BOM -Path $targetPath -Text $codeText
-                    Write-Log ("✔ Экспортирован модуль: {0}{1}" -f $vbComponent.Name, $extension) ([ConsoleColor]::Green)
+                    Write-Log ("✔ Экспортирован модуль: {0}" -f $fileName) ([ConsoleColor]::Green)
                 }
             }
             elseif ($extension -eq ".frm") {
                 $vbComponent.Export($targetPath)
                 Convert-TextFile-ToUtf8Bom -Path $targetPath
-                Write-Log ("✔ Экспортирована форма: {0}{1}" -f $vbComponent.Name, $extension) ([ConsoleColor]::Green)
+                Write-Log ("✔ Экспортирована форма: {0}" -f $fileName) ([ConsoleColor]::Green)
             }
         }
         catch {
@@ -416,10 +425,12 @@ function Export-VBAModules {
     Write-Log "✅ Все модули успешно экспортированы." ([ConsoleColor]::Cyan)
 }
 
+
 function Import-VBAModules {
     <#
         Импорт модулей, классов и форм VBA из папки VBA в книгу.
-        Модули перезаписываются, формы импортируются с копированием .frx.
+        Ожидаемый шаблон имени файла:
+        <ИмяКнигиБезРасширения>_<ИмяМодуля>.bas/.cls/.frm
     #>
     [CmdletBinding()]
     param(
@@ -427,15 +438,33 @@ function Import-VBAModules {
         $Session
     )
 
-    $workbook   = $Session.Workbook
-    $exportPath = $Session.ExportPath
+    $workbook          = $Session.Workbook
+    $exportPath        = $Session.ExportPath
+    $workbookBaseName  = $Session.WorkbookBaseName
 
     Write-Log ">>> Импорт VBA-компонентов..." ([ConsoleColor]::Gray)
 
-    $files = Get-ChildItem -Path $exportPath -Include *.bas,*.cls,*.frm -File -ErrorAction SilentlyContinue
+    # Берём только файлы, относящиеся к данной книге
+    $patternBas = "{0}_*.bas" -f $workbookBaseName
+    $patternCls = "{0}_*.cls" -f $workbookBaseName
+    $patternFrm = "{0}_*.frm" -f $workbookBaseName
+
+    $files = Get-ChildItem -Path $exportPath -Include $patternBas, $patternCls, $patternFrm -File -ErrorAction SilentlyContinue
+
     foreach ($file in $files) {
-        $name      = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
-        $extension = $file.Extension.ToLowerInvariant()
+        $fileBaseName = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+        $extension    = $file.Extension.ToLowerInvariant()
+        $prefix       = "{0}_" -f $workbookBaseName
+
+        if (-not $fileBaseName.StartsWith($prefix)) {
+            continue
+        }
+
+        # Имя модуля = всё после "<ИмяКниги>_"
+        $moduleName = $fileBaseName.Substring($prefix.Length)
+        if ([string]::IsNullOrWhiteSpace($moduleName)) {
+            continue
+        }
 
         try {
             if ($extension -in @(".bas", ".cls")) {
@@ -444,11 +473,11 @@ function Import-VBAModules {
                     $text = Fix-Mojibake -Text $text
                 }
 
-                $vbComponent = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $name }
+                $vbComponent = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $moduleName }
                 if (-not $vbComponent) {
                     $componentType = if ($extension -eq ".cls") { 2 } else { 1 }
                     $vbComponent = $workbook.VBProject.VBComponents.Add($componentType)
-                    $vbComponent.Name = $name
+                    $vbComponent.Name = $moduleName
                 }
 
                 $codeModule = $vbComponent.CodeModule
@@ -458,10 +487,10 @@ function Import-VBAModules {
                 }
                 $codeModule.AddFromString($text)
 
-                Write-Log ("✔ Импортирован модуль: {0}{1}" -f $name, $extension) ([ConsoleColor]::Green)
+                Write-Log ("✔ Импортирован модуль: {0} ({1})" -f $moduleName, $file.Name) ([ConsoleColor]::Green)
             }
             elseif ($extension -eq ".frm") {
-                $existing = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $name }
+                $existing = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $moduleName }
                 if ($existing) {
                     $workbook.VBProject.VBComponents.Remove($existing)
                 }
@@ -474,11 +503,11 @@ function Import-VBAModules {
                     Copy-Item -Path $frxPath -Destination $targetFrx -Force
                 }
 
-                Write-Log ("✔ Импортирована форма: {0}{1}" -f $name, $extension) ([ConsoleColor]::Green)
+                Write-Log ("✔ Импортирована форма: {0} ({1})" -f $moduleName, $file.Name) ([ConsoleColor]::Green)
             }
         }
         catch {
-            Write-Log ("⚠ Ошибка при импорте {0}{1}: {2}" -f $name, $extension, $_.Exception.Message) ([ConsoleColor]::Red)
+            Write-Log ("⚠ Ошибка при импорте {0} из {1}: {2}" -f $moduleName, $file.Name, $_.Exception.Message) ([ConsoleColor]::Red)
         }
     }
 
@@ -486,19 +515,38 @@ function Import-VBAModules {
 }
 
 <# ======================= VS CODE / ФИНАЛ ======================= #>
-function Open-VbaFolderInCode {
+ffunction Open-VbaInEditor {
     <#
-        Открытие папки VBA в текущем окне VS Code (если доступна команда code).
+        Открываем результаты экспорта:
+        1) Если установлен Notepad++ по пути C:\Program Files\Notepad++\notepad++.exe,
+           открываем в нём все .bas-файлы текущей книги.
+        2) Если Notepad++ не найден или .bas нет,
+           просто открываем папку VBA в Проводнике.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ExportPath
+        [string]$ExportPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$WorkbookBaseName
     )
 
-    if (Get-Command -Name code -ErrorAction SilentlyContinue) {
-        Start-Process -FilePath 'code' -ArgumentList "-r `"$ExportPath`""
-        Write-Log "📂 Открыт каталог в текущем окне VS Code." ([ConsoleColor]::DarkGray)
+    $notepadPath = "C:\Program Files\Notepad++\notepad++.exe"
+
+    $patternBas = "{0}_*.bas" -f $WorkbookBaseName
+    $basFiles = Get-ChildItem -Path $ExportPath -Filter $patternBas -File -ErrorAction SilentlyContinue
+
+    if ((Test-Path -Path $notepadPath) -and $basFiles -and $basFiles.Count -gt 0) {
+        # Открываем все соответствующие .bas в Notepad++
+        $args = $basFiles.FullName
+        Start-Process -FilePath $notepadPath -ArgumentList $args
+        Write-Log ("📄 Открыто в Notepad++ файлов: {0}" -f $basFiles.Count) ([ConsoleColor]::DarkGray)
+    }
+    else {
+        # Fallback: просто открыть папку в Проводнике
+        Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$ExportPath`""
+        Write-Log "📂 Открыт каталог VBA в Проводнике." ([ConsoleColor]::DarkGray)
     }
 }
 
@@ -589,11 +637,12 @@ function Invoke-SyncVbaMain {
     }
 
     if ($exportDone -and -not $importDone) {
-        Open-VbaFolderInCode -ExportPath $session.ExportPath
+        Open-VbaInEditor -ExportPath $session.ExportPath -WorkbookBaseName $session.WorkbookBaseName
     }
 
     Show-FinishMessage
 }
+
 
 # Автоматический запуск только если скрипт запускают как .\Sync-VBA.ps1,
 # а не dot-source (в обёртках Export-VBA.ps1 / Import-VBA.ps1).
