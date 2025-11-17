@@ -22,28 +22,31 @@ jobs:
           echo "$PWD\pwsh7\pwsh.exe" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Show PowerShell Version
-        run: pwsh -c "$PSVersionTable.PSVersion"
+        run: |
+          pwsh -c "$PSVersionTable.PSVersion"
 
       - name: Install PSScriptAnalyzer
-        run: pwsh -c "Install-Module PSScriptAnalyzer -Force -Scope CurrentUser"
+        run: |
+          pwsh -c "Install-Module PSScriptAnalyzer -Force -Scope CurrentUser"
 
       - name: Run PSScriptAnalyzer
-        run: pwsh -c "
-          \$files = Get-ChildItem -Recurse -Filter *.ps1
-          if (\$files.Count -eq 0) { Write-Host 'No ps1 files'; exit 0 }
+        run: |
+          pwsh -c '
+            $files = Get-ChildItem -Recurse -Filter *.ps1
+            if ($files.Count -eq 0) { Write-Host "No ps1 files"; exit 0 }
 
-          \$paths = @()
-          foreach (\$f in \$files) { \$paths += \$f.FullName }
+            $paths = @()
+            foreach ($f in $files) { $paths += $f.FullName }
 
-          Write-Host 'Analyzing:'
-          \$paths | ForEach-Object { Write-Host ' - ' \$_ }
+            Write-Host "Analyzing:"
+            $paths | ForEach-Object { Write-Host (" - " + $_) }
 
-          \$errors = Invoke-ScriptAnalyzer -Path \$paths -Severity Error
-          if (\$errors) {
-            Write-Host 'PSScriptAnalyzer errors:'
-            \$errors | Format-List
-            exit 1
-          }
+            $errors = Invoke-ScriptAnalyzer -Path $paths -Severity Error
+            if ($errors) {
+              Write-Host "PSScriptAnalyzer errors:"
+              $errors | Format-List
+              exit 1
+            }
 
-          Write-Host 'No PSScriptAnalyzer errors.'
-        "
+            Write-Host "No PSScriptAnalyzer errors."
+          '
