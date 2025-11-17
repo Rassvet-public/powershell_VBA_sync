@@ -1,4 +1,4 @@
-﻿name: PSScriptAnalyzer Check v4
+﻿name: PSScriptAnalyzer Check
 
 on:
   push:
@@ -14,39 +14,35 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install PowerShell 7
-        run: |
-          $url = "https://github.com/PowerShell/PowerShell/releases/download/v7.4.2/PowerShell-7.4.2-win-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile pwsh.zip
-          Expand-Archive pwsh.zip -DestinationPath pwsh7
-          echo "$PWD\pwsh7\pwsh.exe" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Show PowerShell Version
-        run: |
-          pwsh -c "$PSVersionTable.PSVersion"
+      - name: Show PowerShell version
+        shell: pwsh
+        run: $PSVersionTable.PSVersion
 
       - name: Install PSScriptAnalyzer
-        run: |
-          pwsh -c "Install-Module PSScriptAnalyzer -Force -Scope CurrentUser"
+        shell: pwsh
+        run: Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
 
       - name: Run PSScriptAnalyzer
+        shell: pwsh
         run: |
-          pwsh -c '
-            $files = Get-ChildItem -Recurse -Filter *.ps1
-            if ($files.Count -eq 0) { Write-Host "No ps1 files"; exit 0 }
+          $files = Get-ChildItem -Recurse -Filter *.ps1
 
-            $paths = @()
-            foreach ($f in $files) { $paths += $f.FullName }
+          if ($files.Count -eq 0) {
+            Write-Host "No ps1 files found"
+            exit 0
+          }
 
-            Write-Host "Analyzing:"
-            $paths | ForEach-Object { Write-Host (" - " + $_) }
+          $paths = $files.FullName
 
-            $errors = Invoke-ScriptAnalyzer -Path $paths -Severity Error
-            if ($errors) {
-              Write-Host "PSScriptAnalyzer errors:"
-              $errors | Format-List
-              exit 1
-            }
+          Write-Host "Analyzing:"
+          $paths | ForEach-Object { Write-Host (" - " + $_) }
 
-            Write-Host "No PSScriptAnalyzer errors."
-          '
+          $errors = Invoke-ScriptAnalyzer -Path $paths -Severity Error
+
+          if ($errors) {
+            Write-Host "❌ PSScriptAnalyzer errors:"
+            $errors | Format-List
+            exit 1
+          }
+
+          Write-Host "✔ No PSScriptAnalyzer errors"
