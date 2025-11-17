@@ -1,8 +1,10 @@
 ﻿# -*- coding: utf-8 -*-
 <#
-    Sync-VBA.ps1  v2025.11.17r1
-    Основной скрипт: экспорт / импорт VBA с поддержкой x86 Excel,
-    автодетектом кодировок и аккуратным управлением Excel.
+    Sync-VBA.ps1  v2025.11.17r2
+    Скрипт синхронизации VBA-модулей Excel:
+    - Экспорт модулей/классов/форм в папку VBA (UTF-8 BOM)
+    - Импорт модулей/классов/форм из папки VBA
+    - Поддержка x86 Excel через перезапуск 32-битного PowerShell
 #>
 
 param(
@@ -10,7 +12,7 @@ param(
     [string]$ProjectPath = (Get-Location)
 )
 
-# Глобальный путь к лог-файлу для всех функций
+# Глобальный путь к лог-файлу
 $script:SyncVba_LogFile = $null
 
 <# ======================= ЛОГИРОВАНИЕ ======================= #>
@@ -18,7 +20,7 @@ function Write-Log {
     <#
         Многострочный комментарий:
         Функция логирования в консоль и файл SyncVBA.log.
-        Цветной вывод в консоль, в файл пишем всегда серым текстом.
+        Цветной вывод в консоль, в файл пишем всегда текст с меткой времени.
     #>
     [CmdletBinding()]
     param(
@@ -76,7 +78,7 @@ function Fix-Mojibake {
 function Write-UTF8BOM {
     <#
         Запись текста в файл с явным UTF-8 BOM,
-        как требует твой проект.
+        как требуется для проекта.
     #>
     [CmdletBinding()]
     param(
@@ -119,7 +121,7 @@ function Convert-TextFile-ToUtf8Bom {
 function Write-EnvironmentInfo {
     <#
         Логируем архитектуру PowerShell и Excel.
-        Используем ключ реестра Excel 2016 (16.0).
+        Используем ключ реестра Excel 2016 (16.0) для примерной оценки.
     #>
     [CmdletBinding()]
     param()
@@ -135,7 +137,7 @@ function Write-EnvironmentInfo {
         }
     }
     catch {
-        # Тихая ошибка, просто не знаем архитектуру Excel
+        $excelArch = ""
     }
 
     Write-Log ("📊 Среда: Excel={0}, PowerShell={1}" -f $excelArch, $psArch)
@@ -179,8 +181,8 @@ function Invoke-32BitSelf {
     Write-Log "Перезапуск в 32-битной версии PowerShell для совместимости с Excel..." ([ConsoleColor]::Yellow)
 
     $argumentList = @(
-        '-NoExit',
-		'-ExecutionPolicy', 'Bypass',
+        '-NoExit',                      # для отладки оставляем окно открытым
+        '-ExecutionPolicy','Bypass',
         '-NoProfile',
         '-File', "`"$PSCommandPath`"",
         '-Mode', $Mode,
@@ -208,9 +210,17 @@ function Select-Workbook {
         [string]$ProjectPath
     )
 
-    $workbooks = @($Excel.Workbooks)
+    try {
+        $workbooks = $Excel.Workbooks
+        $wbCount   = $workbooks.Count
+    }
+    catch {
+        Write-Log ("⚠ Не удалось получить коллекцию Workbooks: {0}" -f $_.Exception.Message) ([ConsoleColor]::Red)
+        return $null
+    }
 
-    if ($workbooks.Count -eq 0) {
+    if ($wbCount -eq 0) {
+        # Нет открытых книг — ищем .xlsm в каталоге проекта
         $xlsmFiles = Get-ChildItem -Path $ProjectPath -Filter '*.xlsm' -ErrorAction SilentlyContinue
         if ($xlsmFiles.Count -eq 1) {
             return $Excel.Workbooks.Open($xlsmFiles.FullName)
@@ -222,25 +232,44 @@ function Select-Workbook {
             }
             $selection = Read-Host "Введите номер файла"
             $selectedIndex = [int]$selection - 1
-            return $Excel.Workbooks.Open($xlsmFiles[$selectedIndex].FullName)
+            if ($selectedIndex -ge 0 -and $selectedIndex -lt $xlsmFiles.Count) {
+                return $Excel.Workbooks.Open($xlsmFiles[$selectedIndex].FullName)
+            }
+            else {
+                Write-Log "❌ Неверный номер файла при выборе .xlsm" ([ConsoleColor]::Red)
+                return $null
+            }
         }
         else {
             Write-Host "Нет открытых книг и .xlsm не найдено. Укажи путь:" -ForegroundColor Yellow
             $path = Read-Host "Полный путь к .xlsm"
+            if ([string]::IsNullOrWhiteSpace($path)) {
+                Write-Log "❌ Путь к книге не указан." ([ConsoleColor]::Red)
+                return $null
+            }
             return $Excel.Workbooks.Open($path)
         }
     }
-    elseif ($workbooks.Count -eq 1) {
+    elseif ($wbCount -eq 1) {
+        # Одна открытая книга
         return $workbooks.Item(1)
     }
     else {
+        # Несколько открытых книг — даём выбрать
         Write-Host "`nНайдено несколько открытых книг:" -ForegroundColor Yellow
-        for ($index = 0; $index -lt $workbooks.Count; $index++) {
-            Write-Host ("  {0}. {1}" -f ($index + 1), $workbooks[$index].Name)
+        for ($index = 1; $index -le $wbCount; $index++) {
+            $wb = $workbooks.Item($index)
+            Write-Host ("  {0}. {1}" -f $index, $wb.Name)
         }
         $selection = Read-Host "Введите номер файла"
         $selectedIndex = [int]$selection
-        return $workbooks.Item($selectedIndex)
+        if ($selectedIndex -ge 1 -and $selectedIndex -le $wbCount) {
+            return $workbooks.Item($selectedIndex)
+        }
+        else {
+            Write-Log "❌ Неверный номер файла при выборе открытой книги" ([ConsoleColor]::Red)
+            return $null
+        }
     }
 }
 
@@ -284,8 +313,14 @@ function Start-ExcelSession {
     $excel.Interactive    = $false
 
     $workbook = Select-Workbook -Excel $excel -ProjectPath $ProjectPath
-    $workbookName      = $workbook.Name
-    $workbookBaseName  = [System.IO.Path]::GetFileNameWithoutExtension($workbookName)
+
+    if (-not $workbook) {
+        Write-Log "❌ Не удалось выбрать книгу Excel." ([ConsoleColor]::Red)
+        return $null
+    }
+
+    $workbookName     = $workbook.Name
+    $workbookBaseName = [System.IO.Path]::GetFileNameWithoutExtension($workbookName)
 
     Write-Log ("📘 Активная книга: {0}" -f $workbookName)
 
@@ -305,7 +340,6 @@ function Start-ExcelSession {
     }
 }
 
-
 function Stop-ExcelSession {
     <#
         Аккуратно сохраняем книгу, восстанавливаем параметры Excel,
@@ -317,8 +351,12 @@ function Stop-ExcelSession {
         $Session
     )
 
-    $excel          = $Session.Excel
-    $workbook       = $Session.Workbook
+    if (-not $Session) {
+        return
+    }
+
+    $excel           = $Session.Excel
+    $workbook        = $Session.Workbook
     $createdNewExcel = $Session.CreatedNewExcel
 
     try {
@@ -377,7 +415,14 @@ function Export-VBAModules {
 
     Write-Log ">>> Экспорт VBA-компонентов..." ([ConsoleColor]::Gray)
 
-    $vbComponents = @($workbook.VBProject.VBComponents | Where-Object { $_.Type -ne 100 })
+    try {
+        $vbComponents = @($workbook.VBProject.VBComponents | Where-Object { $_.Type -ne 100 })
+    }
+    catch {
+        Write-Log ("❌ Ошибка доступа к VBProject (проверь 'Trust access to the VBA project'): {0}" -f $_.Exception.Message) ([ConsoleColor]::Red)
+        return
+    }
+
     $total = $vbComponents.Count
     $index = 0
 
@@ -395,7 +440,6 @@ function Export-VBAModules {
                 default { $extension = ".bas" }
             }
 
-            # Имя файла: <ИмяКнигиБезРасширения>_<ИмяМодуля>.ext
             $fileName   = "{0}_{1}{2}" -f $workbookBaseName, $vbComponent.Name, $extension
             $targetPath = Join-Path -Path $exportPath -ChildPath $fileName
 
@@ -425,7 +469,6 @@ function Export-VBAModules {
     Write-Log "✅ Все модули успешно экспортированы." ([ConsoleColor]::Cyan)
 }
 
-
 function Import-VBAModules {
     <#
         Импорт модулей, классов и форм VBA из папки VBA в книгу.
@@ -444,7 +487,6 @@ function Import-VBAModules {
 
     Write-Log ">>> Импорт VBA-компонентов..." ([ConsoleColor]::Gray)
 
-    # Берём только файлы, относящиеся к данной книге
     $patternBas = "{0}_*.bas" -f $workbookBaseName
     $patternCls = "{0}_*.cls" -f $workbookBaseName
     $patternFrm = "{0}_*.frm" -f $workbookBaseName
@@ -460,7 +502,6 @@ function Import-VBAModules {
             continue
         }
 
-        # Имя модуля = всё после "<ИмяКниги>_"
         $moduleName = $fileBaseName.Substring($prefix.Length)
         if ([string]::IsNullOrWhiteSpace($moduleName)) {
             continue
@@ -514,8 +555,8 @@ function Import-VBAModules {
     Write-Log "✅ Импорт завершён, книга сохранена." ([ConsoleColor]::Cyan)
 }
 
-<# ======================= VS CODE / ФИНАЛ ======================= #>
-ffunction Open-VbaInEditor {
+<# ======================= ОТКРЫТИЕ РЕЗУЛЬТАТОВ ЭКСПОРТА ======================= #>
+function Open-VbaInEditor {
     <#
         Открываем результаты экспорта:
         1) Если установлен Notepad++ по пути C:\Program Files\Notepad++\notepad++.exe,
@@ -538,18 +579,17 @@ ffunction Open-VbaInEditor {
     $basFiles = Get-ChildItem -Path $ExportPath -Filter $patternBas -File -ErrorAction SilentlyContinue
 
     if ((Test-Path -Path $notepadPath) -and $basFiles -and $basFiles.Count -gt 0) {
-        # Открываем все соответствующие .bas в Notepad++
         $args = $basFiles.FullName
         Start-Process -FilePath $notepadPath -ArgumentList $args
         Write-Log ("📄 Открыто в Notepad++ файлов: {0}" -f $basFiles.Count) ([ConsoleColor]::DarkGray)
     }
     else {
-        # Fallback: просто открыть папку в Проводнике
         Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$ExportPath`""
         Write-Log "📂 Открыт каталог VBA в Проводнике." ([ConsoleColor]::DarkGray)
     }
 }
 
+<# ======================= ФИНАЛЬНОЕ СООБЩЕНИЕ ======================= #>
 function Show-FinishMessage {
     <#
         Финальное сообщение и пауза, чтобы окно не закрывалось мгновенно.
@@ -617,7 +657,12 @@ function Invoke-SyncVbaMain {
 
     Invoke-32BitSelf -Mode $effectiveMode -ProjectPath $ProjectPath
 
-    $session    = Start-ExcelSession -ProjectPath $ProjectPath
+    $session = Start-ExcelSession -ProjectPath $ProjectPath
+    if (-not $session) {
+        Show-FinishMessage
+        return
+    }
+
     $exportDone = $false
     $importDone = $false
 
@@ -643,8 +688,7 @@ function Invoke-SyncVbaMain {
     Show-FinishMessage
 }
 
-
-# Автоматический запуск только если скрипт запускают как .\Sync-VBA.ps1,
+# Автоматический запуск, если скрипт запускают как .\Sync-VBA.ps1,
 # а не dot-source (в обёртках Export-VBA.ps1 / Import-VBA.ps1).
 if ($MyInvocation.InvocationName -ne '.') {
     Invoke-SyncVbaMain -Mode $Mode -ProjectPath $ProjectPath
