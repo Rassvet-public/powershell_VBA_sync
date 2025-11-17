@@ -32,15 +32,18 @@ jobs:
             exit 0
           }
 
-          $paths = $files.FullName
+          $errors = @()
 
-          Write-Host "Analyzing:"
-          $paths | ForEach-Object { Write-Host (" - " + $_) }
+          foreach ($f in $files) {
+            Write-Host "Analyzing: $($f.FullName)"
+            $result = Invoke-ScriptAnalyzer -Path $f.FullName -Severity Error
+            if ($result) {
+              $errors += $result
+            }
+          }
 
-          $errors = Invoke-ScriptAnalyzer -Path $paths -Severity Error
-
-          if ($errors) {
-            Write-Host "❌ PSScriptAnalyzer errors:"
+          if ($errors.Count -gt 0) {
+            Write-Host "❌ PSScriptAnalyzer errors found:"
             $errors | Format-List
             exit 1
           }
