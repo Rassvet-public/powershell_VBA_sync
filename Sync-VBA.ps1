@@ -343,7 +343,16 @@ function Start-ExcelSession {
 function Stop-ExcelSession {
     <#
         Аккуратно сохраняем книгу, восстанавливаем параметры Excel,
-        закрываем созданный экземпляр (если мы его создавали).
+        и закрываем Excel только если мы его сами создавали.
+
+        Логика:
+        - если Excel был уже запущен (CreatedNewExcel = $false):
+            * книгу сохраняем, но НЕ закрываем;
+            * Excel не закрываем;
+        - если Excel создал скрипт (CreatedNewExcel = $true):
+            * сохраняем книгу;
+            * закрываем книгу;
+            * делаем Quit() Excel.
     #>
     [CmdletBinding()]
     param(
@@ -361,21 +370,31 @@ function Stop-ExcelSession {
 
     try {
         if ($workbook -ne $null) {
-            Write-Log "💾 Сохраняем книгу..." ([ConsoleColor]::Gray)
-            $workbook.Save()
+            try {
+                Write-Log "💾 Сохраняем книгу..." ([ConsoleColor]::Gray)
+                $workbook.Save()
+            }
+            catch {
+                Write-Log ("⚠ Ошибка при сохранении книги: {0}" -f $_.Exception.Message) ([ConsoleColor]::Red)
+            }
+
+            if ($createdNewExcel) {
+                # Книга и Excel были созданы скриптом — закрываем книгу
+                try {
+                    $workbook.Close($true) | Out-Null
+                    Write-Log "📕 Книга закрыта (скрипт сам её открывал)." ([ConsoleColor]::DarkGray)
+                }
+                catch {
+                    Write-Log ("⚠ Ошибка при закрытии книги: {0}" -f $_.Exception.Message) ([ConsoleColor]::Red)
+                }
+            }
+            else {
+                # Книга была открыта до запуска скрипта — оставляем открытой
+                Write-Log "🔁 Книга была открыта пользователем — оставляем её открытой." ([ConsoleColor]::DarkGray)
+            }
         }
-    }
-    catch {
-        Write-Log ("⚠ Ошибка при сохранении книги: {0}" -f $_.Exception.Message) ([ConsoleColor]::Red)
     }
     finally {
-        if ($workbook -ne $null) {
-            try {
-                $workbook.Close($true) | Out-Null
-            }
-            catch { }
-        }
-
         if ($excel -ne $null) {
             try {
                 $excel.DisplayAlerts  = $true
@@ -385,9 +404,15 @@ function Stop-ExcelSession {
 
                 if ($createdNewExcel) {
                     $excel.Quit()
+                    Write-Log "✅ Закрыт экземпляр Excel, созданный скриптом." ([ConsoleColor]::DarkGray)
+                }
+                else {
+                    Write-Log "🔁 Excel был запущен ранее — оставляем его работать." ([ConsoleColor]::DarkGray)
                 }
             }
-            catch { }
+            catch {
+                Write-Log ("⚠ Ошибка при финализации Excel: {0}" -f $_.Exception.Message) ([ConsoleColor]::Red)
+            }
 
             [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
             [GC]::Collect()
