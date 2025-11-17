@@ -512,11 +512,16 @@ function Import-VBAModules {
 
     Write-Log ">>> Импорт VBA-компонентов..." ([ConsoleColor]::Gray)
 
-    $patternBas = "{0}_*.bas" -f $workbookBaseName
-    $patternCls = "{0}_*.cls" -f $workbookBaseName
-    $patternFrm = "{0}_*.frm" -f $workbookBaseName
+    # Вместо -Include используем -Filter + Where-Object по расширению
+    $files = Get-ChildItem -Path $exportPath -File -Filter ("{0}_*" -f $workbookBaseName) -ErrorAction SilentlyContinue |
+             Where-Object { $_.Extension.ToLowerInvariant() -in '.bas', '.cls', '.frm' }
 
-    $files = Get-ChildItem -Path $exportPath -Include $patternBas, $patternCls, $patternFrm -File -ErrorAction SilentlyContinue
+    Write-Log ("🔍 Найдено файлов для импорта: {0}" -f ($files.Count)) ([ConsoleColor]::DarkGray)
+
+    if (-not $files -or $files.Count -eq 0) {
+        Write-Log "⚠ Подходящих файлов не найдено (проверь папку VBA и имена файлов вида <Книга>_<Модуль>.bas)." ([ConsoleColor]::Yellow)
+        return
+    }
 
     foreach ($file in $files) {
         $fileBaseName = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
@@ -524,9 +529,11 @@ function Import-VBAModules {
         $prefix       = "{0}_" -f $workbookBaseName
 
         if (-not $fileBaseName.StartsWith($prefix)) {
+            # На всякий случай, защитный фильтр
             continue
         }
 
+        # Имя модуля = всё после "<ИмяКниги>_"
         $moduleName = $fileBaseName.Substring($prefix.Length)
         if ([string]::IsNullOrWhiteSpace($moduleName)) {
             continue
@@ -534,14 +541,16 @@ function Import-VBAModules {
 
         try {
             if ($extension -in @(".bas", ".cls")) {
+                # Читаем текст модуля из файла
                 $text = Get-Content -Raw -Encoding UTF8 -Path $file.FullName
                 if (Test-Mojibake -Text $text) {
                     $text = Fix-Mojibake -Text $text
                 }
 
+                # Ищем существующий компонент с таким именем
                 $vbComponent = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $moduleName }
                 if (-not $vbComponent) {
-                    $componentType = if ($extension -eq ".cls") { 2 } else { 1 }
+                    $componentType = if ($extension -eq ".cls") { 2 } else { 1 }  # 1=standard, 2=class
                     $vbComponent = $workbook.VBProject.VBComponents.Add($componentType)
                     $vbComponent.Name = $moduleName
                 }
@@ -551,11 +560,13 @@ function Import-VBAModules {
                 if ($linesCount -gt 0) {
                     $codeModule.DeleteLines(1, $linesCount)
                 }
+
                 $codeModule.AddFromString($text)
 
                 Write-Log ("✔ Импортирован модуль: {0} ({1})" -f $moduleName, $file.Name) ([ConsoleColor]::Green)
             }
             elseif ($extension -eq ".frm") {
+                # Формы: удаляем старую, импортируем новую
                 $existing = $workbook.VBProject.VBComponents | Where-Object { $_.Name -eq $moduleName }
                 if ($existing) {
                     $workbook.VBProject.VBComponents.Remove($existing)
@@ -563,6 +574,7 @@ function Import-VBAModules {
 
                 $null = $workbook.VBProject.VBComponents.Import($file.FullName)
 
+                # Поддержка .frx рядом с .frm
                 $frxPath = [System.IO.Path]::ChangeExtension($file.FullName, ".frx")
                 if (Test-Path -Path $frxPath) {
                     $targetFrx = Join-Path -Path ([System.IO.Path]::GetDirectoryName($workbook.FullName)) -ChildPath ([System.IO.Path]::GetFileName($frxPath))

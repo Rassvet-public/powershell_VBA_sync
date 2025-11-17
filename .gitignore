@@ -11,6 +11,7 @@ ehthumbs.db
 *.log
 *.tmp
 *.xlsx
+*.xlsb
 *.xlsm
 *.xls
 *.bas
@@ -20,6 +21,7 @@ ehthumbs.db
 *.xlk
 *.bak
 ~$*.xlsx
+~$*.xlsb
 ~$*.xlsm
 ~$*.xls
 
