@@ -11,10 +11,11 @@ param(
     [int]$Mode = 0,
     [string]$ProjectPath = (Get-Location)
 )
+dfsd sd e3
 
 # Глобальный путь к лог-файлу
 $script:SyncVba_LogFile = $null
-
+ 
 <# ======================= ЛОГИРОВАНИЕ ======================= #>
 function Write-Log {
     <#
