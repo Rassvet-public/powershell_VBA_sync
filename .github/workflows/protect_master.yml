@@ -1,0 +1,14 @@
+﻿name: Block direct pushes to master
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  block:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Direct push is forbidden
+        run: |
+          echo "❌ Direct push to master is disabled. Use dev → master via PR."
+          exit 1
