@@ -1,8 +1,8 @@
-﻿name: PSScriptAnalyzer Check
+﻿name: PSScriptAnalyzer Check v4
 
 on:
   push:
-    branches: [ dev ]
+    branches: [ dev, master ]
   pull_request:
     branches: [ dev, master ]
 
