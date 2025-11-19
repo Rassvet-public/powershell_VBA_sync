@@ -1,4 +1,4 @@
-- name: Run PSScriptAnalyzer using custom RuleSet
+name: Run PSScriptAnalyzer using custom RuleSet
 shell: pwsh
 run: |
 $ErrorActionPreference = 'Stop'
