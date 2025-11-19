@@ -1,4 +1,4 @@
-﻿name: UTF-8 BOM Encoding Check
+name: UTF-8 BOM Encoding Check
 
 on:
   push:
