@@ -1,53 +1,53 @@
-      - name: Run PSScriptAnalyzer using custom RuleSet
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
+- name: Run PSScriptAnalyzer using custom RuleSet
+shell: pwsh
+run: |
+$ErrorActionPreference = 'Stop'
 
-          $ruleSet = Join-Path $PWD ".github\PSScriptAnalyzerRuleSet.psd1"
-          Write-Host "Using RuleSet file: $ruleSet"
+$ruleSet = Join-Path $PWD ".github\PSScriptAnalyzerRuleSet.psd1"
+Write-Host "Using RuleSet file: $ruleSet"
 
-          $files = Get-ChildItem -Recurse -Filter *.ps1
-          if (-not $files) {
-            Write-Host "No .ps1 files found."
-            exit 0
-          }
+$files = Get-ChildItem -Recurse -Filter *.ps1
+if (-not $files) {
+Write-Host "No .ps1 files found."
+exit 0
+}
 
-          $hadErrors = $false
+$hadErrors = $false
 
-          foreach ($file in $files) {
+foreach ($file in $files) {
 
-            Write-Host "=== Parsing $($file.FullName)"
+Write-Host "=== Parsing $($file.FullName)"
 
-            $ast = $null
-            $parseErrors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile(
-              $file.FullName,
-              [ref]$ast,
-              [ref]$parseErrors
-            )
+$ast = $null
+$parseErrors = $null
+[void][System.Management.Automation.Language.Parser]::ParseFile(
+$file.FullName,
+[ref]$ast,
+[ref]$parseErrors
+)
 
-            if ($parseErrors) {
-              Write-Host "Parse errors in $($file.FullName):"
-              $parseErrors | Format-List
-              $hadErrors = $true
-              continue
-            }
+if ($parseErrors) {
+Write-Host "Parse errors in $($file.FullName):"
+$parseErrors | Format-List
+$hadErrors = $true
+continue
+}
 
-            Write-Host "=== Running PSScriptAnalyzer for $($file.Name)"
+Write-Host "=== Running PSScriptAnalyzer for $($file.Name)"
 
-            # исправлено:
-            $diag = Invoke-ScriptAnalyzer -Path $file.FullName -Settings $ruleSet
+# исправлено:
+$diag = Invoke-ScriptAnalyzer -Path $file.FullName -Settings $ruleSet
 
-            if ($diag) {
-              Write-Host "Diagnostics for $($file.Name):"
-              $diag | Format-List
-              $hadErrors = $true
-            }
-          }
+if ($diag) {
+Write-Host "Diagnostics for $($file.Name):"
+$diag | Format-List
+$hadErrors = $true
+}
+}
 
-          if ($hadErrors) {
-            Write-Error "Syntax or PSScriptAnalyzer errors found."
-            exit 1
-          }
+if ($hadErrors) {
+Write-Error "Syntax or PSScriptAnalyzer errors found."
+exit 1
+}
 
-          Write-Host "All PowerShell files passed RuleSet analysis."
+Write-Host "All PowerShell files passed RuleSet analysis."
