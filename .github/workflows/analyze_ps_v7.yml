@@ -59,7 +59,7 @@ jobs:
 
             # Collect all .ps1 files
             $files = Get-ChildItem -Recurse -Filter *.ps1 |
-                Where-Object { $_.FullName -notmatch 'pwsh7' }
+                Where-Object { $_.FullName -notmatch '\\pwsh7\\' }
 
 
             if ($files.Count -eq 0) {
