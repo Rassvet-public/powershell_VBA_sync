@@ -120,3 +120,76 @@ jobs:
             Write-Host ""
             Write-Host "✔ SUCCESS: All files passed PSScriptAnalyzer."
           '
+      # ---------------------------------------------------------
+      # 5. Run PSScriptAnalyzer (с синтаксической проверкой)
+      # ---------------------------------------------------------
+      - name: Run PSScriptAnalyzer with RuleSet
+        run: |
+          pwsh -c '
+            Set-StrictMode -Version Latest
+            $ErrorActionPreference = "Stop"
+
+            $ruleSet = ".github/PSScriptAnalyzerRuleSet.psd1"
+
+            Write-Host "=== Using RuleSet:" $ruleSet
+
+            if (-not (Test-Path $ruleSet)) {
+              Write-Host "❌ ERROR: RuleSet file not found!"
+              exit 1
+            }
+
+            $files = Get-ChildItem -Recurse -Filter *.ps1
+
+            if ($files.Count -eq 0) {
+              Write-Host "⚠️ No .ps1 files found — skipping"
+              exit 0
+            }
+
+            $hasErrors = $false
+
+            foreach ($file in $files) {
+
+              Write-Host ""
+              Write-Host "=== Checking file:" $file.FullName
+
+              # 1. AST Syntax check
+              $ast = $null
+              $parseErrors = $null
+
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  $file.FullName,
+                  [ref]$ast,
+                  [ref]$parseErrors
+              )
+
+              if ($parseErrors) {
+                Write-Host "❌ Syntax errors detected in $($file.Name):"
+                $parseErrors | Format-List
+                $hasErrors = $true
+                continue
+              }
+
+              # 2. RuleSet-based ScriptAnalyzer
+              $result = Invoke-ScriptAnalyzer `
+                          -Path $file.FullName `
+                          -Settings $ruleSet
+
+              if ($result) {
+                Write-Host "❌ ScriptAnalyzer findings in $($file.Name):"
+                $result | Format-List
+                $hasErrors = $true
+              }
+              else {
+                Write-Host "✔ OK:" $file.Name
+              }
+            }
+
+            if ($hasErrors) {
+              Write-Host ""
+              Write-Host "❌ FAIL: Problems found."
+              exit 1
+            }
+
+            Write-Host ""
+            Write-Host "✔ SUCCESS: All files passed PSScriptAnalyzer."
+          '
