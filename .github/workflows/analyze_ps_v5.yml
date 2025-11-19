@@ -1,27 +1,3 @@
-﻿name: PSScriptAnalyzer Check v5
-
-on:
-  push:
-    branches: [ dev, master ]
-  pull_request:
-    branches: [ dev, master ]
-
-jobs:
-  pssa:
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Show PowerShell version
-        shell: pwsh
-        run: '$PSVersionTable.PSVersion'
-
-      - name: Install PSScriptAnalyzer
-        shell: pwsh
-        run: Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-
       - name: Run PSScriptAnalyzer using custom RuleSet
         shell: pwsh
         run: |
@@ -58,7 +34,9 @@ jobs:
             }
 
             Write-Host "=== Running PSScriptAnalyzer for $($file.Name)"
-            $diag = Invoke-ScriptAnalyzer -Path $file.FullName -CustomRulePath $ruleSet
+
+            # исправлено:
+            $diag = Invoke-ScriptAnalyzer -Path $file.FullName -Settings $ruleSet
 
             if ($diag) {
               Write-Host "Diagnostics for $($file.Name):"
