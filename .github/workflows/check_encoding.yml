@@ -1,10 +1,10 @@
-name: UTF-8 BOM Encoding Check
+name: UTF-8 Encoding Check v6
 
 on:
   push:
-    branches: [ dev, master ]
+    branches: [ dev, master, codex ]
   pull_request:
-    branches: [ dev, master ]
+    branches: [ dev, master, codex ]
 
 jobs:
   encoding_check:
@@ -14,30 +14,132 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify encoding
+      - name: Verify UTF-8 / UTF-8-BOM encoding rules
         shell: pwsh
         run: |
-          $patterns = @("*.ps1", "*.txt", "*.md")
-          $bad = @()
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
 
-          foreach ($pattern in $patterns) {
-            $files = Get-ChildItem -Recurse -Filter $pattern
-            foreach ($file in $files) {
-              $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
-              if ($bytes.Length -lt 3) {
-                $bad += $file.FullName
-                continue
+          # ---------------------------------------------------------
+          # Функция: Проверка UTF-8 BOM (для PowerShell файлов)
+          # ---------------------------------------------------------
+          function Test-Utf8Bom {
+            param([System.IO.FileInfo]$File)
+
+            $fs = [System.IO.File]::Open(
+              $File.FullName,
+              [System.IO.FileMode]::Open,
+              [System.IO.FileAccess]::Read,
+              [System.IO.FileShare]::ReadWrite
+            )
+
+            try {
+              # Файл слишком короткий для BOM
+              if ($fs.Length -lt 3) {
+                return @{ Bom = $false; Short = $true }
               }
-              if (!($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) {
-                $bad += $file.FullName
+
+              $buffer = New-Object byte[] 3
+              $null = $fs.Read($buffer,0,3)
+
+              $isBom = (
+                $buffer[0] -eq 0xEF -and
+                $buffer[1] -eq 0xBB -and
+                $buffer[2] -eq 0xBF
+              )
+
+              return @{ Bom = $isBom; Short = $false }
+            }
+            finally { $fs.Dispose() }
+          }
+
+          # ---------------------------------------------------------
+          # Функция: Проверка отсутствия BOM (для .md, .txt, .yml)
+          # ---------------------------------------------------------
+          function Test-Utf8WithoutBom {
+            param([System.IO.FileInfo]$File)
+
+            $fs = [System.IO.File]::Open(
+              $File.FullName,
+              [System.IO.FileMode]::Open,
+              [System.IO.FileAccess]::Read,
+              [System.IO.FileShare]::ReadWrite
+            )
+            try {
+              if ($fs.Length -lt 3) {
+                return @{ Bom = $false }
+              }
+
+              $buffer = New-Object byte[] 3
+              $null = $fs.Read($buffer,0,3)
+
+              $isBom = (
+                $buffer[0] -eq 0xEF -and
+                $buffer[1] -eq 0xBB -and
+                $buffer[2] -eq 0xBF
+              )
+
+              return @{ Bom = $isBom }
+            }
+            finally { $fs.Dispose() }
+          }
+
+          # ---------------------------------------------------------
+          # Правила:
+          # PowerShell → UTF-8 BOM
+          # Документы/YAML → UTF-8 без BOM
+          # ---------------------------------------------------------
+          $mustHaveBomPatterns = @('*.ps1','*.psm1','*.psd1')
+          $mustNotHaveBomPatterns = @('*.md','*.txt','*.yml','*.yaml')
+
+          $workspace = $env:GITHUB_WORKSPACE
+          $fail = New-Object System.Collections.Generic.List[psobject]
+
+          # ---------------------------------------------------------
+          # Проверка файлов, которые ДОЛЖНЫ иметь BOM
+          # ---------------------------------------------------------
+          foreach ($pattern in $mustHaveBomPatterns) {
+            $files = Get-ChildItem -Path $workspace -Recurse -File -Filter $pattern |
+                     Where-Object { $_.FullName -notmatch '\\.git(\\|$)' }
+
+            foreach ($file in $files) {
+              $r = Test-Utf8Bom $file
+              if (-not $r.Bom) {
+                $fail.Add([PSCustomObject]@{
+                  Path     = $file.FullName
+                  Expected = 'UTF-8 BOM'
+                  Found    = 'NO BOM'
+                })
               }
             }
           }
 
-          if ($bad.Count -gt 0) {
-            Write-Host "❌ The following files are NOT UTF-8 BOM encoded:"
-            $bad | ForEach-Object { Write-Host " - $_" }
+          # ---------------------------------------------------------
+          # Проверка файлов, которые НЕ ДОЛЖНЫ иметь BOM
+          # ---------------------------------------------------------
+          foreach ($pattern in $mustNotHaveBomPatterns) {
+            $files = Get-ChildItem -Path $workspace -Recurse -File -Filter $pattern |
+                     Where-Object { $_.FullName -notmatch '\\.git(\\|$)' }
+
+            foreach ($file in $files) {
+              $r = Test-Utf8WithoutBom $file
+              if ($r.Bom) {
+                $fail.Add([PSCustomObject]@{
+                  Path     = $file.FullName
+                  Expected = 'UTF-8 (NO BOM)'
+                  Found    = 'UTF-8 BOM'
+                })
+              }
+            }
+          }
+
+          # ---------------------------------------------------------
+          # Итоговый отчёт
+          # ---------------------------------------------------------
+          if ($fail.Count -gt 0) {
+            Write-Host "❌ Обнаружены ошибки кодировки:"
+            $fail | Sort-Object Path | Format-Table -AutoSize
             exit 1
           }
 
-          Write-Host "✔ All checked files are UTF-8 BOM encoded."
+          Write-Host "✔ Все файлы имеют корректную кодировку."
