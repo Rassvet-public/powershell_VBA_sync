@@ -57,10 +57,9 @@ jobs:
                 exit 1
             }
 
-            # Collect all .ps1 files
+            # Collect all .ps1 files (excluding PowerShell distribution)
             $files = Get-ChildItem -Recurse -Filter *.ps1 |
-                Where-Object { $_.FullName -notmatch 'pwsh7' }
-
+                Where-Object { $_.FullName -notmatch "pwsh7" }
 
             if ($files.Count -eq 0) {
                 Write-Host "? No .ps1 files found — skipping"
