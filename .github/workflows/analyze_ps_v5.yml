@@ -24,8 +24,9 @@ jobs:
           echo "$PWD\pwsh7\pwsh.exe" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       # 3. Show version
-      - name: Show PowerShell version
-        run: pwsh -c "$PSVersionTable"
+- name: Show PowerShell version
+  run: pwsh -c "Write-Output \$PSVersionTable"
+
 
       # 4. Install PSScriptAnalyzer
       - name: Install PSScriptAnalyzer
