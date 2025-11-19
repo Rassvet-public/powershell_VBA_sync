@@ -1,0 +1,68 @@
+name: PSScriptAnalyzer Check v5
+
+on:
+  push:
+    branches: [ dev, master ]
+  pull_request:
+    branches: [ dev, master ]
+
+jobs:
+  pssa:
+    runs-on: windows-latest
+
+    steps:
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Install PowerShell 7
+      - name: Install PowerShell 7
+        run: |
+          $url = "https://github.com/PowerShell/PowerShell/releases/download/v7.4.2/PowerShell-7.4.2-win-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile pwsh.zip
+          Expand-Archive pwsh.zip -DestinationPath pwsh7
+          echo "$PWD\pwsh7\pwsh.exe" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # 3. Show version
+      - name: Show PowerShell version
+        run: pwsh -c "$PSVersionTable"
+
+      # 4. Install PSScriptAnalyzer
+      - name: Install PSScriptAnalyzer
+        run: pwsh -c "Install-Module PSScriptAnalyzer -Force -Scope CurrentUser"
+
+      # 5. Run analyzer with RuleSet
+      - name: Run PSScriptAnalyzer with RuleSet
+        run: |
+          pwsh -c '
+            Write-Host "=== Using RuleSet file: .github/PSScriptAnalyzerRuleSet.psd1"
+
+            if (-Not (Test-Path ".github/PSScriptAnalyzerRuleSet.psd1")) {
+              Write-Host "ERROR: RuleSet file not found!"
+              exit 1
+            }
+
+            $files = Get-ChildItem -Recurse -Filter *.ps1
+
+            if ($files.Count -eq 0) {
+              Write-Host "No .ps1 files found — skipping analysis"
+              exit 0
+            }
+
+            foreach ($file in $files) {
+              Write-Host "=== Analyzing: $($file.FullName)"
+              $result = Invoke-ScriptAnalyzer -Path $file.FullName `
+                         -CustomRulePath ".github/PSScriptAnalyzerRuleSet.psd1" `
+                         -Recurse
+
+              if ($result) {
+                Write-Host "? Problems found in $($file.Name)"
+                $result | Format-List
+                exit 1
+              } else {
+                Write-Host "? OK: $($file.Name)"
+              }
+            }
+
+            Write-Host "? All files passed PSScriptAnalyzer"
+          '
